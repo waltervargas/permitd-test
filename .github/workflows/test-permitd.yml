@@ -1,0 +1,65 @@
+name: Test permitd
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test-permitd:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get OIDC token
+        id: oidc
+        run: |
+          TOKEN=$(curl -s -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=permitd" | jq -r '.value')
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Health check
+        run: |
+          curl -sf https://apps.walt3r.dev/healthz
+          echo "Health check passed"
+
+      - name: List containers (authenticated)
+        run: |
+          HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.token }}" \
+            https://apps.walt3r.dev/v5.0.0/libpod/containers/json)
+          echo "HTTP Status: $HTTP_CODE"
+          cat response.json
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: List images (authenticated)
+        run: |
+          HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.token }}" \
+            https://apps.walt3r.dev/v5.0.0/libpod/images/json)
+          echo "HTTP Status: $HTTP_CODE"
+          cat response.json
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: Attempt unauthorized action (should fail)
+        run: |
+          HTTP_CODE=$(curl -s -o response.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${{ steps.oidc.outputs.token }}" \
+            -X POST \
+            https://apps.walt3r.dev/v5.0.0/libpod/containers/create)
+          echo "HTTP Status: $HTTP_CODE"
+          cat response.json
+          if [ "$HTTP_CODE" != "403" ]; then
+            echo "Expected 200, got $HTTP_CODE"
+            exit 1
+          fi
+          echo "Correctly denied unauthorized action"
